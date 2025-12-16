@@ -1,10 +1,10 @@
-# xor-pytorch
+# xor-tinygrad
 
-Vibe-coded PyTorch exploration to train a network to recognize an XOR function
+Vibe-coded tinygrad exploration to train a network to recognize an XOR function
 
 ## Description
 
-A small program using PyTorch to train a neural network to recognize an XOR function.
+A small program using tinygrad to train a neural network to recognize an XOR function.
 This Python program should have options to do any of:
 1) Generate random training/test data given a specified seed
 2) Train and save network weights
@@ -28,7 +28,7 @@ python3 -m virtualenv myenv
 myenv/bin/activate
 pip install -r requirements.txt
 ```
-(but actually the only dep in `requirements.txt` is `pip install torch`)
+(but actually the only dep in `requirements.txt` is `pip install tinygrad`)
 
 ## Usage
 
@@ -37,10 +37,10 @@ pip install -r requirements.txt
 python3 xor_net.py generate --seed 42 --samples 1000 --output train_data.json
 
 # Train
-python3 xor_net.py train --data train_data.json --weights weights.pt --epochs 10000 --lr 2.0
+python3 xor_net.py train --data train_data.json --weights weights.safetensors --epochs 10000 --lr 2.0
 
 # Test (prints GPU then CPU benchmarks)
-python3 xor_net.py test --data test_data.json --weights weights.pt
+python3 xor_net.py test --data test_data.json --weights weights.safetensors
 ```
 
 ## Testing Inference
