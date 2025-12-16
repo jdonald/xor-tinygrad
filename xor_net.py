@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """
-XOR Neural Network - Train a network to recognize XOR function using PyTorch.
+XOR Neural Network - Train a network to recognize XOR function using tinygrad.
 """
 
 import argparse
 import json
 import time
 import random
-import torch
-import torch.nn as nn
-import torch.optim as optim
+from tinygrad import Tensor, Device
+from tinygrad.nn import Linear
+from tinygrad.nn.optim import SGD
+from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict
 
 
-class XORNet(nn.Module):
+class XORNet:
     """Simple 2-layer neural network for XOR function."""
 
     def __init__(self, hidden_size=4):
-        super().__init__()
-        self.hidden = nn.Linear(2, hidden_size)
-        self.output = nn.Linear(hidden_size, 1)
-        self.activation = nn.Sigmoid()
+        self.hidden = Linear(2, hidden_size)
+        self.output = Linear(hidden_size, 1)
 
-    def forward(self, x):
-        x = self.activation(self.hidden(x))
-        x = self.activation(self.output(x))
+    def __call__(self, x):
+        x = self.hidden(x).sigmoid()
+        x = self.output(x).sigmoid()
         return x
+
+    def parameters(self):
+        """Get all trainable parameters."""
+        return [self.hidden.weight, self.hidden.bias, self.output.weight, self.output.bias]
 
 
 def xor_label(a: float, b: float) -> float:
@@ -59,73 +62,79 @@ def load_data(filepath: str) -> list[dict]:
         return json.load(f)
 
 
-def data_to_tensors(data: list[dict], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert data list to PyTorch tensors."""
-    inputs = torch.tensor([[d["inputs"][0], d["inputs"][1]] for d in data], dtype=torch.float32, device=device)
-    labels = torch.tensor([[d["label"]] for d in data], dtype=torch.float32, device=device)
+def data_to_tensors(data: list[dict], device: str) -> tuple[Tensor, Tensor]:
+    """Convert data list to tinygrad tensors."""
+    inputs = Tensor([[d["inputs"][0], d["inputs"][1]] for d in data], device=device)
+    labels = Tensor([[d["label"]] for d in data], device=device)
     return inputs, labels
 
 
-def train(model: XORNet, data_path: str, weights_path: str, epochs: int = 1000, lr: float = 1.0, device: torch.device = None):
+def train(model: XORNet, data_path: str, weights_path: str, epochs: int = 1000, lr: float = 1.0, device: str = None):
     """Train the model and save weights."""
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = "GPU" if Device.DEFAULT in ["GPU", "CUDA", "METAL"] else "CPU"
 
-    model = model.to(device)
     data = load_data(data_path)
     inputs, labels = data_to_tensors(data, device)
 
-    criterion = nn.BCELoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr)
+    optimizer = SGD(model.parameters(), lr=lr)
+
+    # Enable training mode
+    Tensor.training = True
 
     print(f"Training on {device} with {len(data)} samples for {epochs} epochs...")
 
     for epoch in range(epochs):
-        optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+
+        # Binary Cross Entropy Loss
+        loss = -(labels * outputs.log() + (1 - labels) * (1 - outputs).log()).mean()
+
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         if (epoch + 1) % 100 == 0:
-            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.6f}")
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.numpy():.6f}")
 
-    torch.save(model.state_dict(), weights_path)
+    state_dict = get_state_dict(model)
+    safe_save(state_dict, weights_path)
     print(f"Saved weights to {weights_path}")
 
 
 def test(model: XORNet, data_path: str, weights_path: str):
     """Test the model and report error rate with GPU/CPU benchmarks."""
+    # Disable training mode
+    Tensor.training = False
+
     data = load_data(data_path)
 
     # Test on GPU first (if available)
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
+    gpu_available = Device.DEFAULT in ["GPU", "CUDA", "METAL"]
+    if gpu_available:
+        device = "GPU"
         model_gpu = XORNet()
-        model_gpu.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
-        model_gpu = model_gpu.to(device)
-        model_gpu.eval()
+        state_dict = safe_load(weights_path)
+        load_state_dict(model_gpu, state_dict)
 
         inputs, labels = data_to_tensors(data, device)
 
         # Warmup
-        with torch.no_grad():
-            for _ in range(10):
-                _ = model_gpu(inputs)
+        for _ in range(10):
+            _ = model_gpu(inputs).realize()
 
-        torch.cuda.synchronize()
+        Device[device].synchronize()
         start_time = time.perf_counter()
-        with torch.no_grad():
-            outputs = model_gpu(inputs)
-        torch.cuda.synchronize()
+        outputs = model_gpu(inputs).realize()
+        Device[device].synchronize()
         gpu_time = time.perf_counter() - start_time
 
-        predictions = (outputs >= 0.5).float()
-        correct = (predictions == labels).sum().item()
+        predictions = (outputs.numpy() >= 0.5).astype(float)
+        correct = (predictions == labels.numpy()).sum()
         error_rate = 1.0 - (correct / len(data))
 
         print(f"\n=== GPU Benchmark ===")
-        print(f"Device: {torch.cuda.get_device_name(0)}")
+        print(f"Device: {Device.DEFAULT}")
         print(f"Inference time: {gpu_time * 1000:.4f} ms")
         print(f"Samples: {len(data)}")
         print(f"Correct: {int(correct)}/{len(data)}")
@@ -134,26 +143,23 @@ def test(model: XORNet, data_path: str, weights_path: str):
         print("\nGPU not available, skipping GPU benchmark.")
 
     # Test on CPU
-    device = torch.device("cpu")
+    device = "CPU"
     model_cpu = XORNet()
-    model_cpu.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
-    model_cpu = model_cpu.to(device)
-    model_cpu.eval()
+    state_dict = safe_load(weights_path)
+    load_state_dict(model_cpu, state_dict)
 
     inputs, labels = data_to_tensors(data, device)
 
     # Warmup
-    with torch.no_grad():
-        for _ in range(10):
-            _ = model_cpu(inputs)
+    for _ in range(10):
+        _ = model_cpu(inputs).realize()
 
     start_time = time.perf_counter()
-    with torch.no_grad():
-        outputs = model_cpu(inputs)
+    outputs = model_cpu(inputs).realize()
     cpu_time = time.perf_counter() - start_time
 
-    predictions = (outputs >= 0.5).float()
-    correct = (predictions == labels).sum().item()
+    predictions = (outputs.numpy() >= 0.5).astype(float)
+    correct = (predictions == labels.numpy()).sum()
     error_rate = 1.0 - (correct / len(data))
 
     print(f"\n=== CPU Benchmark ===")
@@ -176,14 +182,14 @@ def main():
     # Train command
     train_parser = subparsers.add_parser("train", help="Train the network and save weights")
     train_parser.add_argument("--data", type=str, default="data.json", help="Training data file (default: data.json)")
-    train_parser.add_argument("--weights", type=str, default="weights.pt", help="Output weights file (default: weights.pt)")
+    train_parser.add_argument("--weights", type=str, default="weights.safetensors", help="Output weights file (default: weights.safetensors)")
     train_parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs (default: 1000)")
     train_parser.add_argument("--lr", type=float, default=1.0, help="Learning rate (default: 1.0)")
 
     # Test command
     test_parser = subparsers.add_parser("test", help="Test the network and report error rate")
     test_parser.add_argument("--data", type=str, default="data.json", help="Test data file (default: data.json)")
-    test_parser.add_argument("--weights", type=str, default="weights.pt", help="Weights file to load (default: weights.pt)")
+    test_parser.add_argument("--weights", type=str, default="weights.safetensors", help="Weights file to load (default: weights.safetensors)")
 
     args = parser.parse_args()
 
