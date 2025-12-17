@@ -112,10 +112,9 @@ def test(model: XORNet, data_path: str, weights_path: str):
     # Test on GPU first (if available)
     gpu_available = Device.DEFAULT in ["GPU", "CUDA", "METAL"]
     if gpu_available:
-        device = "GPU"
+        device = Device.DEFAULT
         model_gpu = XORNet()
         state_dict = safe_load(weights_path)
-        load_state_dict(model_gpu, state_dict)
 
         inputs, labels = data_to_tensors(data, device)
 
@@ -146,7 +145,11 @@ def test(model: XORNet, data_path: str, weights_path: str):
     device = "CPU"
     model_cpu = XORNet()
     state_dict = safe_load(weights_path)
-    load_state_dict(model_cpu, state_dict)
+    # Manually assign weights to ensure correct device placement
+    model_cpu.hidden.weight = state_dict['hidden.weight'].to(device).realize()
+    model_cpu.hidden.bias = state_dict['hidden.bias'].to(device).realize()
+    model_cpu.output.weight = state_dict['output.weight'].to(device).realize()
+    model_cpu.output.bias = state_dict['output.bias'].to(device).realize()
 
     inputs, labels = data_to_tensors(data, device)
 

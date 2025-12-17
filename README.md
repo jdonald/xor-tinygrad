@@ -28,7 +28,9 @@ python3 -m virtualenv myenv
 myenv/bin/activate
 pip install -r requirements.txt
 ```
-(but actually the only dep in `requirements.txt` is `pip install tinygrad`)
+```
+sudo dnf install -y clang
+```
 
 ## Usage
 
